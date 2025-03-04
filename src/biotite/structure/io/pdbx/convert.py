@@ -644,7 +644,7 @@ def _parse_inter_residue_bonds(atom_site, struct_conn):
     )
 
 
-def _find_matches(query_arrays, reference_arrays):
+def _find_matches_by_dense_array(query_arrays, reference_arrays):
     """
     For each index in the `query_arrays` find the indices in the
     `reference_arrays` where all query values match the reference counterpart.
@@ -674,6 +674,59 @@ def _find_matches(query_arrays, reference_arrays):
     # -1 indicates that no match was found in the reference
     match_indices = np.full(len(query_arrays[0]), -1, dtype=int)
     match_indices[query_matches] = reference_matches
+    return match_indices
+
+
+def _find_matches_by_dict(query_arrays, reference_arrays):
+    """
+    For each index in the `query_arrays` find the indices in the
+    `reference_arrays` where all query values match the reference counterpart.
+    If no match is found for a query, the corresponding index is -1.
+    """
+    # Convert reference arrays to a dictionary for O(1) lookups
+    reference_dict = {}
+    unambiguously_keys = set()
+    for idx, col in enumerate(np.stack(reference_arrays, axis=-1)):
+        ref_key = tuple(col)
+        if ref_key in reference_dict:
+            unambiguously_keys.add(ref_key)
+            continue
+        reference_dict[ref_key] = idx
+
+    match_indices = []
+    for query_idx, query_col in enumerate(np.stack(query_arrays, axis=-1)):
+        query_key = tuple(query_col)
+        occurrence = reference_dict.get(query_key, -1)
+
+        if occurrence == -1:
+            # -1 indicates that no match was found in the reference
+            match_indices.append(-1)
+        elif query_key in unambiguously_keys:
+            # The query cannot be uniquely matched to an atom in the reference
+            raise InvalidFileError(
+                f"The covalent bond in the 'struct_conn' category at index "
+                f"{query_idx} cannot be unambiguously assigned to atoms in "
+                f"the 'atom_site' category"
+            )
+        else:
+            match_indices.append(occurrence)
+
+    return np.array(match_indices)
+
+
+def _find_matches(query_arrays, reference_arrays):
+    """
+    For each index in the `query_arrays` find the indices in the
+    `reference_arrays` where all query values match the reference counterpart.
+    If no match is found for a query, the corresponding index is -1.
+    """
+    #  it was observed that when the size exceeds 2**13 (8192)
+    #  the dict strategy becomes significantly faster than the dense array
+    #  and does not cause excessive memory usage.
+    if query_arrays[0].shape[0] * reference_arrays[0].shape[0] <= 8192:
+        match_indices = _find_matches_by_dense_array(query_arrays, reference_arrays)
+    else:
+        match_indices = _find_matches_by_dict(query_arrays, reference_arrays)
     return match_indices
 
 
